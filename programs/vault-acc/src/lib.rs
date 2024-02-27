@@ -68,6 +68,30 @@ pub mod vault_acc {
 
         spl_transfer(cpi, amount)
     }
+
+    pub fn withdraw_spl(ctx: Context<SPLWithdraw>, amount: u64) -> Result<()> {
+        let accounts = SPLTransfer {
+            from: ctx.accounts.vault.to_account_info(),
+            to: ctx.accounts.owner_ata.to_account_info(),
+            authority: ctx.accounts.auth.to_account_info()
+        };
+
+        let seeds = &[
+            b"auth",
+            ctx.accounts.state.to_account_info().key.as_ref(),
+            &[ctx.accounts.state.auth_bump]
+        ];
+
+        let pda_signer = &[&seeds[..]];
+
+        let cpi = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(), 
+            accounts, 
+            pda_signer
+        );
+
+        spl_transfer(cpi, amount)
+    }
 }
 
 #[derive(Accounts)]
@@ -162,6 +186,47 @@ pub struct SPLDesposit<'info> {
         bump,
         token::mint=mint,
         token::authority=auth,
+    )]
+    vault: Account<'info, TokenAccount>,
+
+    token_program: Program<'info, Token>,
+    associated_token_program: Program<'info, AssociatedToken>,
+    system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SPLWithdraw<'info> {
+    #[account(mut)]
+    owner: Signer<'info>,
+
+    mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        associated_token::mint=mint,
+        associated_token::authority=owner,
+    )]
+    owner_ata: Account<'info, TokenAccount>,
+
+    #[account(
+        seeds=[b"state", owner.key().as_ref()],
+        bump=state.vault_bump
+    )]
+    state: Account<'info, VaultState>,
+
+    #[account(
+        seeds=[b"auth", state.key().as_ref()],
+        bump=state.auth_bump
+    )]
+    // CHECK: This is safe
+    auth: UncheckedAccount<'info>,
+    
+    #[account(
+        mut,
+        seeds=[b"spl_vault", state.key().as_ref()],
+        bump,
+        token::mint=mint,
+        token::authority=auth
     )]
     vault: Account<'info, TokenAccount>,
 
