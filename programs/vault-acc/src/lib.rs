@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::system_program::{Transfer, transfer};
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{Mint, Token, TokenAccount, Transfer as SPLTransfer, transfer as spl_transfer};
+use anchor_spl::token::{ close_account, CloseAccount};
 
 declare_id!("9pU1ESxdgeWPKjQwg6R7vuVom8rno7L8CNb76EUh6vVN");
 
@@ -91,6 +92,72 @@ pub mod vault_acc {
         );
 
         spl_transfer(cpi, amount)
+    }
+
+    pub fn close_vault(ctx: Context<CloseVault>) -> Result<()> {
+        match ctx.accounts.vault.try_lamports() {
+            Ok(amount) => {
+                let accounts = Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.owner.to_account_info()
+                };
+
+                let seeds = &[
+                    b"auth",
+                    ctx.accounts.state.to_account_info().key.as_ref(),
+                    &[ctx.accounts.state.auth_bump]
+                ];
+
+                let pda_signer = &[&seeds[..]];
+
+                let cpi = CpiContext::new_with_signer(
+                    ctx.accounts.system_program.to_account_info(), 
+                    accounts, 
+                    pda_signer
+                );
+                 
+                transfer(cpi, amount)?;
+            },
+            Err(_) => ()
+        }
+
+        let seeds = &[
+            b"auth",
+            ctx.accounts.state.to_account_info().key.as_ref(),
+            &[ctx.accounts.state.auth_bump],
+        ];
+
+        let pda_signer = &[&seeds[..]];
+
+        if ctx.accounts.spl_vault.amount > 0 {
+            let accounts = SPLTransfer {
+                from: ctx.accounts.spl_vault.to_account_info(),
+                to: ctx.accounts.owner_ata.to_account_info(),
+                authority: ctx.accounts.auth.to_account_info()
+            };
+
+            let cpi = CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(), 
+                accounts, 
+                pda_signer
+            );
+
+            spl_transfer(cpi, ctx.accounts.spl_vault.amount.clone())?;
+        }
+
+        let close_accounts_spl = CloseAccount {
+            account: ctx.accounts.spl_vault.to_account_info(),
+            destination: ctx.accounts.owner.to_account_info(),
+            authority: ctx.accounts.auth.to_account_info(),
+        };
+
+        let cpi = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(), 
+            close_accounts_spl, 
+            pda_signer
+        );
+
+        close_account(cpi)
     }
 }
 
@@ -218,7 +285,7 @@ pub struct SPLWithdraw<'info> {
         seeds=[b"auth", state.key().as_ref()],
         bump=state.auth_bump
     )]
-    // CHECK: This is safe
+    /// CHECK: This is safe
     auth: UncheckedAccount<'info>,
     
     #[account(
@@ -233,6 +300,57 @@ pub struct SPLWithdraw<'info> {
     token_program: Program<'info, Token>,
     associated_token_program: Program<'info, AssociatedToken>,
     system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct CloseVault<'info> {
+    #[account(mut)]
+    owner: Signer<'info>,
+
+    mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        associated_token::mint=mint,
+        associated_token::authority=owner,
+    )]
+    owner_ata: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        close=owner,
+        seeds=[b"state", owner.key().as_ref()],
+        bump=state.state_bump
+    )]
+    state: Account<'info, VaultState>,
+
+    #[account(
+        seeds=[b"auth", state.key().as_ref()],
+        bump=state.auth_bump
+    )]
+    /// CHECK: This is safe
+    auth: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds=[b"vault", state.key().as_ref()],
+        bump=state.vault_bump
+    )]
+    vault: SystemAccount<'info>,
+
+    #[account(
+        mut,
+        seeds=[b"spl_vault", state.key().as_ref()],
+        bump,
+        token::mint=mint,
+        token::authority=auth
+    )]
+    spl_vault: Account<'info, TokenAccount>,
+
+    token_program: Program<'info, Token>,
+    token_associated_program: Program<'info, AssociatedToken>,
+    system_program: Program<'info, System>,
+
 }
 
 #[account]
